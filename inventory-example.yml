@@ -1,0 +1,6 @@
+---
+all:
+  hosts:
+    192.168.16.1:
+  vars:
+    ansible_user: change_me
