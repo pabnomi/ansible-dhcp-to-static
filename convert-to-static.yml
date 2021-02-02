@@ -1,0 +1,85 @@
+---
+- hosts: all
+  gather_facts: yes
+  become: no
+  become_method: sudo
+  tasks:
+    - name: Read Remote network config
+      shell: cat /etc/sysconfig/network-scripts/ifcfg-{{ ansible_facts['default_ipv4']['interface'] }}
+      register: network_script
+      changed_when: network_script.rc != 0
+
+    - name: Network configuraiton
+      block:
+        - name: Backup original network config
+          copy:
+            src: "/etc/sysconfig/network-scripts/ifcfg-{{ ansible_facts['default_ipv4']['interface'] }}"
+            dest: "~/ifcfg-{{ ansible_facts['default_ipv4']['interface'] }}.backup"
+            remote_src: yes
+
+        - name: Disable NetworkManager DNS modification
+          lineinfile:
+            path: /etc/NetworkManager/NetworkManager.conf
+            insertafter: '\[main\]'
+            line: 'dns=none'
+            backup: yes
+            state: present
+          become: yes
+
+        - name: Restart NetworkManger service
+          systemd:
+            name: NetworkManager.service
+            state: restarted
+          become: yes
+        - block:
+            - name: Copy new Interface configuration
+              copy:
+                content: |
+                  NAME={{ ansible_facts['default_ipv4']['interface'] }}
+                  DEVICE={{ ansible_facts['default_ipv4']['interface'] }}
+                  ONBOOT=yes
+                  NETBOOT=no
+                  {{ network_script['stdout'] | regex_search('^UUID=.*$', multiline=True) }}
+                  IPV6INIT="no"
+                  BOOTPROTO="none"
+                  TYPE=Ethernet
+                  IPADDR={{ ansible_facts['default_ipv4']['address'] }}
+                  GATEWAY={{ ansible_facts['default_ipv4']['gateway'] }}
+                  NETWORK={{ ansible_facts['default_ipv4']['network'] }}
+                  NETMASK={{ ansible_facts['default_ipv4']['netmask'] }}
+                dest: "/etc/sysconfig/network-scripts/ifcfg-{{ ansible_facts['default_ipv4']['interface'] }}"
+                backup: yes
+                owner: root
+                group: root
+                mode: '0644'
+              become: yes
+              register: backup_info
+
+            - name: Create rescue cronjob
+              cron:
+                name: network_rescue
+                minute: "*/5"
+                cron_file: ansible_rescue
+                user: root
+                job: "\\cp {{ backup_info['backup_file'] }} /etc/sysconfig/network-scripts/ifcfg-{{ ansible_facts['default_ipv4']['interface'] }} && systemctl restart network"
+              become: yes
+              when: backup_info.changed
+
+            - name: Restart network
+              systemd:
+                name: network
+                state: restarted
+              when: backup_info.changed
+              become: yes
+              vars:
+                ansible_command_timeout: 30
+      when: network_script['stdout'] | regex_search('^BOOTPROTO=(|\")dhcp(|\")', multiline=True)
+
+    - name: Remove rescue cronjob
+      file:
+        state: absent
+        path: /etc/cron.d/ansible_rescue
+      become: yes
+
+    - name: Check connection again
+      ansible.builtin.ping:
