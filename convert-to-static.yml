@@ -75,11 +75,12 @@
                 ansible_command_timeout: 30
       when: network_script['stdout'] | regex_search('^BOOTPROTO=(|\")dhcp(|\")', multiline=True)
 
+    - name: Check connection again
+      ansible.builtin.ping:
+
     - name: Remove rescue cronjob
       file:
         state: absent
         path: /etc/cron.d/ansible_rescue
       become: yes
 
-    - name: Check connection again
-      ansible.builtin.ping:
